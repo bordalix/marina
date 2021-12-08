@@ -54,14 +54,14 @@ browser.runtime.onStartup.addListener(() => {
   (async () => {
     if (marinaStore.getState().wallet.encryptedMnemonic !== '') {
       // Everytime the browser starts up we need to set up the popup page
-      await browser.browserAction.setPopup({ popup: 'popup.html' });
+      await browser.action.setPopup({ popup: 'popup.html' });
     }
   })().catch(console.error);
 });
 
 // this listener only run IF AND ONLY IF the popup is not set
 // popup is set at the end of onboarding workflow
-browser.browserAction.onClicked.addListener(() => {
+browser.action.onClicked.addListener(() => {
   (async () => {
     // here we prevent to open many onboarding pages fullscreen
     // in case we have one active already in the current tab
@@ -75,8 +75,8 @@ browser.browserAction.onClicked.addListener(() => {
       welcomeTabID = await openInitializeWelcomeRoute();
       return;
     } else {
-      await browser.browserAction.setPopup({ popup: 'popup.html' });
-      await browser.browserAction.openPopup();
+      await browser.action.setPopup({ popup: 'popup.html' });
+      await browser.action.openPopup();
     }
   })().catch(console.error);
 });

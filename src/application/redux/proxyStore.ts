@@ -16,11 +16,11 @@ export class ProxyStore extends Store<RootReducerState, AnyAction> {
       if (pendingTxStep === 'empty') {
         if (!this.badgeSet) return;
         this.badgeSet = false;
-        browser.browserAction.setBadgeText({ text: '' }).catch((ignore) => ({}));
+        browser.action.setBadgeText({ text: '' }).catch((ignore) => ({}));
       } else {
         if (this.badgeSet) return;
         this.badgeSet = true;
-        browser.browserAction.setBadgeText({ text: '1' }).catch((ignore) => ({}));
+        browser.action.setBadgeText({ text: '1' }).catch((ignore) => ({}));
       }
     });
   }
