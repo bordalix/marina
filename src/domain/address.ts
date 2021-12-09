@@ -30,7 +30,7 @@ export function createAddress(
         unconfidentialAddress: unconfidentialAddress,
       };
     }
-  } catch (err) {
+  } catch (err: any) {
     throw new Error(err.message);
   }
 }

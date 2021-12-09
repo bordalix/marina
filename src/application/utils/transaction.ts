@@ -270,8 +270,10 @@ function getTransfers(
   };
 
   for (const input of vin) {
-    if (!isBlindedOutputInterface(input.prevout) && walletScripts.includes(input.prevout.script)) {
-      addToTransfers(-1 * input.prevout.value, input.prevout.asset);
+    if (input.prevout) {
+      if (!isBlindedOutputInterface(input.prevout) && walletScripts.includes(input.prevout.script)) {
+        addToTransfers(-1 * input.prevout.value, input.prevout.asset);
+      }
     }
   }
 

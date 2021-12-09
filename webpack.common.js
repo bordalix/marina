@@ -8,7 +8,7 @@ module.exports = {
     'index': './src/presentation/index.tsx',
     'background-script': './src/background/background-script.ts',
     'content-script': './src/content/content-script.ts',
-    'inject-script': './src/inject/inject-script',
+    'inject-script': './src/inject/inject-script.ts',
   },
   module: {
     rules: [
@@ -17,11 +17,11 @@ module.exports = {
     ],
   },
   resolve: {
-    fallback: { 
-      "crypto": require.resolve("crypto-browserify"), 
-      "stream": require.resolve("stream-browserify"), 
-      "path": require.resolve("path-browserify"), 
-      "fs": false 
+    fallback: {
+      "crypto": require.resolve("crypto-browserify"),
+      "stream": require.resolve("stream-browserify"),
+      "path": require.resolve("path-browserify"),
+      "fs": false
     },
     extensions: ['.tsx', '.ts', '.js'],
   },
@@ -33,7 +33,7 @@ module.exports = {
     new CleanWebpackPlugin({ cleanStaleWebpackAssets: false }),
     new CopyWebpackPlugin({
       patterns: [
-        { from: './public' }, 
+        { from: './public' },
       ],
     }),
   ],
