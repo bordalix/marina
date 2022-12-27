@@ -2,7 +2,6 @@ import {
   Identity,
   crypto,
   address,
-  Psbt,
   IdentityType,
   Transaction,
   bip341,
@@ -35,6 +34,14 @@ import {
   replaceArtifactConstructorWithArguments,
   toDescriptor,
 } from '@ionio-lang/ionio';
+import {
+  script as bscript,
+  Pset,
+  Signer as PsetSigner,
+  Transaction as LiquidTransaction,
+} from 'liquidjs-lib';
+import type { BIP174SigningData } from 'liquidjs-lib';
+import type { ECPairInterface } from 'ecpair';
 
 // slip13: https://github.com/satoshilabs/slips/blob/master/slip-0013.md#hd-structure
 function namespaceToDerivationPath(namespace: string): string {
@@ -339,18 +346,19 @@ export class CustomScriptIdentity
    *    2.b if the leaf doesn't contain marina signature -> skip
    */
   signPset(psetBase64: string): Promise<string> {
-    const pset = Psbt.fromBase64(psetBase64); // we'll mutate the pset to sign with signature if needed
+    const pset = Pset.fromBase64(psetBase64); // we'll mutate the pset to sign with signature if needed
+    const signer = new PsetSigner(pset);
 
     // check if all inputs have witnessUtxo
     // this is needed to get prevout values and assets
-    const inputsWitnessUtxos = pset.data.inputs.map((i) => i.witnessUtxo);
+    const inputsWitnessUtxos = pset.inputs.map((i) => i.witnessUtxo);
     const inputsUtxos = withoutUndefined(inputsWitnessUtxos);
     if (inputsUtxos.length !== inputsWitnessUtxos.length) {
       throw new Error('missing witnessUtxo, all inputs need witnessUtxo');
     }
 
-    for (let index = 0; index < pset.txInputs.length; index++) {
-      const input = pset.data.inputs[index];
+    for (let index = 0; index < pset.inputs.length; index++) {
+      const input = pset.inputs[index];
       if (input.witnessUtxo) {
         const script = input.witnessUtxo.script.toString('hex');
         const cachedAddrInfos = this.cache.get(script);
@@ -383,7 +391,7 @@ export class CustomScriptIdentity
                   namespaceToDerivationPath(this.namespace).length + 1
                 );
                 const signer = this.masterPrivateKeyNode.derivePath(pathToPrivKey);
-                pset.signInput(index, signer).toBase64();
+                signInput(pset, index, signer).toBase64();
                 continue;
               }
             }
@@ -429,12 +437,10 @@ export class CustomScriptIdentity
             const leaf = { scriptHex: leafScript };
             const leafHash = bip341.tapLeafHash(leaf);
 
-            const sighash = pset.data.inputs[index].sighashType || Transaction.SIGHASH_DEFAULT;
+            const sighash = pset.inputs[index].sighashType || Transaction.SIGHASH_DEFAULT;
 
-            const sighashForSig = pset.TX.hashForWitnessV1(
+            const sighashForSig = pset.getInputPreimage(
               index,
-              inputsUtxos.map((u) => u.script),
-              inputsUtxos.map((u) => ({ value: u.value, asset: u.asset })),
               sighash,
               this.network.genesisBlockHash,
               leafHash
@@ -592,4 +598,21 @@ function customRestorerFromState<R extends CustomScriptIdentityWatchOnly>(
 
     return identity;
   };
+}
+
+function signInput(pset: Pset, index: number, keyPair: ECPairInterface) {
+  const signer = new PsetSigner(pset);
+  // segwit v0 input
+  const sigHashType = pset.inputs[index].sighashType ?? LiquidTransaction.SIGHASH_ALL;
+  const preimage = pset.getInputPreimage(index, sigHashType);
+
+  const partialSig: BIP174SigningData = {
+    partialSig: {
+      pubkey: keyPair.publicKey,
+      signature: bscript.signature.encode(keyPair.sign(preimage), sigHashType),
+    },
+  };
+  signer.addSignature(index, partialSig, Pset.ECDSASigValidator(ecc));
+
+  return pset;
 }

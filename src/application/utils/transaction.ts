@@ -36,6 +36,8 @@ import { fetchTopupFromTaxi, taxiURL } from './taxi';
 import type { DataRecipient, Recipient } from 'marina-provider';
 import { isAddressRecipient, isDataRecipient } from 'marina-provider';
 import * as ecc from 'tiny-secp256k1';
+import { Extractor, Finalizer, Pset } from 'liquidjs-lib';
+import type { TapLeafScript } from 'liquidjs-lib';
 
 const blindingKeyFromAddress = (addr: string): Buffer => {
   return address.fromConfidential(addr).blindingKey;
@@ -154,33 +156,36 @@ export async function blindAndSignPset(
 
   const signedPsetBase64 = await signPset(blindedPset, identities);
 
-  const pset = Psbt.fromBase64(signedPsetBase64);
+  const pset = Pset.fromBase64(signedPsetBase64);
   if (!skipSigValidation) {
-    if (!pset.validateSignaturesOfAllInputs(sigValidator)) {
+    if (!pset.validateAllSignatures(sigValidator)) {
       throw new Error('PSET is not fully signed');
     }
   }
 
-  for (let i = 0; i < pset.txInputs.length; i++) {
-    const input = pset.data.inputs[i];
+  // finalize inputs
+  const finalizer = new Finalizer(pset);
+  for (let i = 0; i < pset.inputs.length; i++) {
+    const input = pset.inputs[i];
     // we need to use special finalizer in case of tapscript
     if (atLeastOne(input.tapLeafScript) && atLeastOne(input.tapScriptSig)) {
-      pset.finalizeInput(i, (_, input) => {
+      finalizer.finalizeInput(i, (_, pset) => {
+        const tapLeafScript = pset.inputs[i].tapLeafScript![0] as TapLeafScript;
         return {
           finalScriptSig: undefined,
           finalScriptWitness: witnessStackToScriptWitness([
             ...input.tapScriptSig!.map((s) => s.signature),
-            input.tapLeafScript![0].script,
-            input.tapLeafScript![0].controlBlock,
+            tapLeafScript.script,
+            tapLeafScript.controlBlock,
           ]),
         };
       });
     } else {
-      pset.finalizeInput(i); // default finalizer handles taproot key path and non taproot sigs
+      finalizer.finalizeInput(i); // default finalizer handles taproot key path and non taproot sigs
     }
   }
 
-  return pset.extractTransaction().toHex();
+  return Extractor.extract(pset).toHex();
 }
 
 const atLeastOne = (arr: any[] | undefined) => arr && arr.length > 0;
