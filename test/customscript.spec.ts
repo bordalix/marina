@@ -116,7 +116,7 @@ describe('CustomScriptIdentity', () => {
     expect(addr.constructorParams).toBeDefined();
   });
 
-  test('should be abloe to instantiate a contract identity with change template', async () => {
+  test('should be able to instantiate a contract identity with change template', async () => {
     const template = JSON.stringify(synthAssetArtifact);
     const changeTemplate = JSON.stringify(transferWithCaptchaArtifact);
     const random = new CustomScriptIdentity({
