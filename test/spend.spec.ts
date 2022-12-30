@@ -1,9 +1,14 @@
 import type { Mnemonic, UnblindedOutput } from 'ldk';
-import { decodePset, fetchAndUnblindUtxos, networks, payments, Transaction } from 'ldk';
+import { fetchAndUnblindUtxos, networks, payments, Transaction } from 'ldk';
 import { makeRandomMnemonic } from './test.utils';
 import { APIURL, broadcastTx, faucet } from './_regtest';
-import { blindAndSignPset, createSendPset } from '../src/application/utils/transaction';
+import {
+  blindAndSignPset,
+  createSendPset,
+  decodePsetv2,
+} from '../src/application/utils/transaction';
 import * as ecc from 'tiny-secp256k1';
+import { Pset } from 'liquidjs-lib';
 
 jest.setTimeout(15000);
 
@@ -71,9 +76,9 @@ describe('create send pset (build, blind & sign)', () => {
       'regtest'
     );
 
-    const decoded = decodePset(pset);
-    expect(decoded.data.outputs).toHaveLength(4); // recipients outputs (2) + fee output + change output
-    expect(decoded.data.inputs).toHaveLength(1); // should select the faucet unspent
+    const decoded = Pset.fromBase64(pset);
+    expect(decoded.outputs).toHaveLength(4); // recipients outputs (2) + fee output + change output
+    expect(decoded.inputs).toHaveLength(1); // should select the faucet unspent
 
     const signed = await blindAndSign(pset, changeAddress);
     await broadcastTx(signed);
@@ -93,9 +98,9 @@ describe('create send pset (build, blind & sign)', () => {
       [{ data: OP_RETURN_DATA, value: 120, asset: network.assetHash }]
     );
 
-    const decoded = decodePset(pset);
-    expect(decoded.data.outputs).toHaveLength(4); // recipient output + fee output + change output + OP_RETURN output
-    expect(decoded.data.inputs).toHaveLength(1); // should select the faucet unspent
+    const decoded = decodePsetv2(pset);
+    expect(decoded.outputs).toHaveLength(4); // recipient output + fee output + change output + OP_RETURN output
+    expect(decoded.inputs).toHaveLength(1); // should select the faucet unspent
 
     const signed = await blindAndSign(pset, changeAddress);
     const signedTx = Transaction.fromHex(signed);

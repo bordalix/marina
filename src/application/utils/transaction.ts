@@ -22,8 +22,6 @@ import {
   getAsset,
   isConfidentialOutput,
   networks,
-  AssetHash,
-  payments,
   confidential,
   Psbt,
 } from 'ldk';
@@ -36,8 +34,43 @@ import { fetchTopupFromTaxi, taxiURL } from './taxi';
 import type { DataRecipient, Recipient } from 'marina-provider';
 import { isAddressRecipient, isDataRecipient } from 'marina-provider';
 import * as ecc from 'tiny-secp256k1';
-import { Extractor, Finalizer, Pset } from 'liquidjs-lib';
-import type { TapLeafScript } from 'liquidjs-lib';
+import {
+  Creator,
+  CreatorInput,
+  CreatorOutput,
+  Extractor,
+  Finalizer,
+  Pset,
+  Updater,
+  Transaction,
+  ZKPGenerator,
+  ZKPValidator,
+  Blinder,
+} from 'liquidjs-lib';
+import secp256k1 from '@vulpemventures/secp256k1-zkp';
+
+export function decodePsetv2(psetBase64: string): Pset {
+  try {
+    return Pset.fromBase64(psetBase64);
+  } catch (ignore) {
+    throw new Error('Invalid pset');
+  }
+}
+
+export function psetToUnsignedHexv2(psetBase64: string): string {
+  let pset: Pset;
+  try {
+    pset = Pset.fromBase64(psetBase64);
+  } catch (ignore) {
+    throw new Error('Invalid pset');
+  }
+
+  return pset.unsignedTx().toHex();
+}
+
+export function psetToUnsignedTxv2(ptx: string): Transaction {
+  return Transaction.fromHex(psetToUnsignedHexv2(ptx));
+}
 
 const blindingKeyFromAddress = (addr: string): Buffer => {
   return address.fromConfidential(addr).blindingKey;
@@ -62,25 +95,21 @@ function outPubKeysMap(pset: string, outputAddresses: string[]): Map<number, Buf
  * @param pset the unblinded pset to compute the blinding data map
  * @param utxos utxos to use in order to get the blinding data of confidential inputs (not needed for unconfidential ones).
  */
-function inputBlindingDataMap(
-  pset: string,
-  utxos: UnblindedOutput[]
-): Map<number, confidential.UnblindOutputResult> {
-  const inputBlindingData = new Map<number, confidential.UnblindOutputResult>();
+function inputBlindingDataBuffer(pset: string, utxos: UnblindedOutput[]): Buffer[] {
+  const inputBlindingData: Buffer[] = [];
   const txidToBuffer = function (txid: string) {
     return Buffer.from(txid, 'hex').reverse();
   };
 
-  let index = -1;
-  for (const input of psetToUnsignedTx(pset).ins) {
-    index++;
+  for (const input of psetToUnsignedTxv2(pset).ins) {
     const utxo = utxos.find(
       (u) => txidToBuffer(u.txid).equals(input.hash) && u.vout === input.index
     );
 
     // only add unblind data if the prevout of the input is confidential
     if (utxo && utxo.unblindData && isConfidentialOutput(utxo.prevout)) {
-      inputBlindingData.set(index, utxo.unblindData);
+      inputBlindingData.push(utxo.unblindData.assetBlindingFactor);
+      inputBlindingData.push(utxo.unblindData.valueBlindingFactor);
     }
   }
 
@@ -89,15 +118,23 @@ function inputBlindingDataMap(
 
 async function blindPset(psetBase64: string, utxos: UnblindedOutput[], outputAddresses: string[]) {
   const outputPubKeys = outPubKeysMap(psetBase64, outputAddresses);
-  const inputBlindingData = inputBlindingDataMap(psetBase64, utxos);
+  const inputBlindingData = inputBlindingDataBuffer(psetBase64, utxos);
+  console.log('inputBlindingData', inputBlindingData);
+  const pset = Pset.fromBase64(psetBase64);
+  console.log('pset', pset.inputs);
 
-  return (
-    await decodePset(psetBase64).blindOutputsByIndex(
-      Psbt.ECCKeysGenerator(ecc),
-      inputBlindingData,
-      outputPubKeys
-    )
-  ).toBase64();
+  const zkpLib = await secp256k1();
+  const zkpValidator = new ZKPValidator(zkpLib);
+  const zkpGenerator = new ZKPGenerator(
+    zkpLib,
+    ZKPGenerator.WithBlindingKeysOfInputs(inputBlindingData)
+  );
+  const ownedInputs = utxos.map((u, index) => ({ index, ...u.unblindData }));
+  const outputBlindingArgs = zkpGenerator.blindOutputs(pset, Pset.ECCKeysGenerator(ecc));
+  const blinder = new Blinder(pset, ownedInputs, zkpValidator, zkpGenerator);
+  blinder.blindLast({ outputBlindingArgs });
+
+  return pset.toBase64();
 }
 
 function isFullyBlinded(psetBase64: string, excludeAddresses: string[]) {
@@ -170,7 +207,7 @@ export async function blindAndSignPset(
     // we need to use special finalizer in case of tapscript
     if (atLeastOne(input.tapLeafScript) && atLeastOne(input.tapScriptSig)) {
       finalizer.finalizeInput(i, (_, pset) => {
-        const tapLeafScript = pset.inputs[i].tapLeafScript![0] as TapLeafScript;
+        const tapLeafScript = pset.inputs[i].tapLeafScript![0];
         return {
           finalScriptSig: undefined,
           finalScriptWitness: witnessStackToScriptWitness([
@@ -208,7 +245,7 @@ export async function signPset(
 }
 
 function outputIndexFromAddress(tx: string, addressToFind: string): number {
-  const utx = psetToUnsignedTx(tx);
+  const utx = psetToUnsignedTxv2(tx);
   const recipientScript = address.toOutputScript(addressToFind);
   return utx.outs.findIndex((out) => out.script.equals(recipientScript));
 }
@@ -294,18 +331,41 @@ export async function createSendPset(
       changeAddressGetter
     );
 
-    const emptyTx = new Psbt({ network: networks[network] }).toBase64();
-    let pset = addToTx(
-      emptyTx,
-      selection.selectedUtxos,
-      recipients.concat(selection.changeOutputs).concat([feeOutput])
+    const pset = Creator.newPset();
+    const updater = new Updater(pset);
+
+    updater.addInputs(
+      selection.selectedUtxos.map((utxo) => ({
+        txid: utxo.txid,
+        txIndex: utxo.vout,
+        witnessUtxo: utxo.prevout,
+        sighashType: Transaction.SIGHASH_ALL,
+      }))
+    );
+
+    updater.addOutputs(
+      recipients
+        .concat(selection.changeOutputs)
+        .concat([feeOutput])
+        .map((u, index) => {
+          const blinderIndex = index;
+          const blindingKey = u.address
+            ? address.isConfidential(u.address)
+              ? address.fromConfidential(u.address).blindingKey
+              : undefined
+            : undefined;
+          const script = u.address
+            ? address.toOutputScript(u.address, networks[network])
+            : undefined;
+          return new CreatorOutput(u.asset, u.value, script, blindingKey, blinderIndex);
+        })
     );
 
     if (data && data.length > 0) {
-      pset = withDataOutputs(pset, data);
+      updater.addOutputs(data.map((out) => ({ ...out, amount: 0 })));
     }
 
-    return { pset, selectedUtxos: selection.selectedUtxos };
+    return { pset: pset.toBase64(), selectedUtxos: selection.selectedUtxos };
   }
 
   const topup = (await fetchTopupFromTaxi(taxiURL[network], feeAssetHash)).topup;
@@ -483,21 +543,4 @@ export function sortRecipients(recipients: Recipient[]): {
   }
 
   return { data, addressRecipients };
-}
-
-// Add OP_RETURN outputs to psetBase64 (unsigned)
-function withDataOutputs(psetBase64: string, dataOutputs: DataRecipient[]) {
-  const pset = decodePset(psetBase64);
-
-  for (const recipient of dataOutputs) {
-    const opReturnPayment = payments.embed({ data: [Buffer.from(recipient.data, 'hex')] });
-    pset.addOutput({
-      script: opReturnPayment.output!,
-      asset: AssetHash.fromHex(recipient.asset, false).bytes,
-      value: confidential.satoshiToConfidentialValue(recipient.value),
-      nonce: Buffer.alloc(1),
-    });
-  }
-
-  return pset.toBase64();
 }

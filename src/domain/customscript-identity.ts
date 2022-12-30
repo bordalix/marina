@@ -3,7 +3,6 @@ import {
   crypto,
   address,
   IdentityType,
-  Transaction,
   bip341,
   toXpub,
   checkIdentityType,
@@ -39,9 +38,9 @@ import {
   Pset,
   Signer as PsetSigner,
   Transaction as LiquidTransaction,
+  Updater,
 } from 'liquidjs-lib';
 import type { BIP174SigningData } from 'liquidjs-lib';
-import type { ECPairInterface } from 'ecpair';
 
 // slip13: https://github.com/satoshilabs/slips/blob/master/slip-0013.md#hd-structure
 function namespaceToDerivationPath(namespace: string): string {
@@ -347,7 +346,7 @@ export class CustomScriptIdentity
    */
   signPset(psetBase64: string): Promise<string> {
     const pset = Pset.fromBase64(psetBase64); // we'll mutate the pset to sign with signature if needed
-    const signer = new PsetSigner(pset);
+    const updater = new Updater(pset);
 
     // check if all inputs have witnessUtxo
     // this is needed to get prevout values and assets
@@ -418,14 +417,10 @@ export class CustomScriptIdentity
                     bip341.findScriptPath(tree, leafHash)
                   );
 
-                pset.updateInput(index, {
-                  tapLeafScript: [
-                    {
-                      leafVersion: 0xc4, // elements tapscript version
-                      script: Buffer.from(leafScript, 'hex'),
-                      controlBlock: taprootSignScriptStack[1],
-                    },
-                  ],
+                updater.addInTapLeafScript(index, {
+                  leafVersion: 0xc4, // elements tapscript version
+                  script: Buffer.from(leafScript, 'hex'),
+                  controlBlock: taprootSignScriptStack[1],
                 });
               }
             }
@@ -437,7 +432,7 @@ export class CustomScriptIdentity
             const leaf = { scriptHex: leafScript };
             const leafHash = bip341.tapLeafHash(leaf);
 
-            const sighash = pset.inputs[index].sighashType || Transaction.SIGHASH_DEFAULT;
+            const sighash = pset.inputs[index].sighashType || LiquidTransaction.SIGHASH_DEFAULT;
 
             const sighashForSig = pset.getInputPreimage(
               index,
@@ -456,15 +451,16 @@ export class CustomScriptIdentity
                   namespaceToDerivationPath(this.namespace).length + 1 // remove base derivation path
                 );
                 const sig = this.signSchnorr(pathToPrivKey, sighashForSig);
-                pset.updateInput(index, {
-                  tapScriptSig: [
-                    {
-                      leafHash,
-                      pubkey: Buffer.from(need.pubkey, 'hex'),
-                      signature: sig,
-                    },
-                  ],
-                });
+                updater.addInTapScriptSig(
+                  index,
+                  {
+                    signature: sig,
+                    pubkey: Buffer.from(need.pubkey, 'hex'),
+                    leafHash,
+                  },
+                  this.network.genesisBlockHash,
+                  Pset.SchnorrSigValidator(ecc)
+                );
               }
             }
           } catch (e) {
@@ -600,7 +596,7 @@ function customRestorerFromState<R extends CustomScriptIdentityWatchOnly>(
   };
 }
 
-function signInput(pset: Pset, index: number, keyPair: ECPairInterface) {
+function signInput(pset: Pset, index: number, keyPair: BIP32Interface) {
   const signer = new PsetSigner(pset);
   // segwit v0 input
   const sigHashType = pset.inputs[index].sighashType ?? LiquidTransaction.SIGHASH_ALL;
