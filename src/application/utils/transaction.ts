@@ -117,19 +117,12 @@ function inputBlindingDataBuffer(pset: string, utxos: UnblindedOutput[]): Buffer
 }
 
 async function blindPset(psetBase64: string, utxos: UnblindedOutput[], outputAddresses: string[]) {
-  const outputPubKeys = outPubKeysMap(psetBase64, outputAddresses);
-  const inputBlindingData = inputBlindingDataBuffer(psetBase64, utxos);
-  console.log('inputBlindingData', inputBlindingData);
   const pset = Pset.fromBase64(psetBase64);
-  console.log('pset', pset.inputs);
+  const ownedInputs = utxos.map((u, index) => ({ index, ...u.unblindData }));
 
   const zkpLib = await secp256k1();
   const zkpValidator = new ZKPValidator(zkpLib);
-  const zkpGenerator = new ZKPGenerator(
-    zkpLib,
-    ZKPGenerator.WithBlindingKeysOfInputs(inputBlindingData)
-  );
-  const ownedInputs = utxos.map((u, index) => ({ index, ...u.unblindData }));
+  const zkpGenerator = new ZKPGenerator(zkpLib, ZKPGenerator.WithOwnedInputs(ownedInputs));
   const outputBlindingArgs = zkpGenerator.blindOutputs(pset, Pset.ECCKeysGenerator(ecc));
   const blinder = new Blinder(pset, ownedInputs, zkpValidator, zkpGenerator);
   blinder.blindLast({ outputBlindingArgs });
@@ -139,7 +132,7 @@ async function blindPset(psetBase64: string, utxos: UnblindedOutput[], outputAdd
 
 function isFullyBlinded(psetBase64: string, excludeAddresses: string[]) {
   const excludeScripts = excludeAddresses.map((a) => address.toOutputScript(a));
-  const tx = psetToUnsignedTx(psetBase64);
+  const tx = psetToUnsignedTxv2(psetBase64);
   for (const out of tx.outs) {
     if (out.script.length > 0 && !excludeScripts.includes(out.script)) {
       if (!out.rangeProof || !out.surjectionProof) {
@@ -364,6 +357,8 @@ export async function createSendPset(
     if (data && data.length > 0) {
       updater.addOutputs(data.map((out) => ({ ...out, amount: 0 })));
     }
+
+    console.log('pset', pset);
 
     return { pset: pset.toBase64(), selectedUtxos: selection.selectedUtxos };
   }
