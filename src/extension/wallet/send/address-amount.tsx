@@ -10,7 +10,7 @@ import { useStorageContext } from '../../context/storage-context';
 
 const AddressAmountView: React.FC = () => {
   const history = useHistory();
-  const { sendFlowRepository, assetRepository, cache } = useStorageContext();
+  const { sendFlowRepository, assetRepository, cache, walletRepository } = useStorageContext();
   const [dataInCache, setDataInCache] = useState<{ amount?: number; address?: string }>();
   const [sendAsset, setSendAsset] = useState<Asset>();
   const [isInitializingFormState, setIsInitializingFormState] = useState(true);
@@ -24,6 +24,7 @@ const AddressAmountView: React.FC = () => {
       setSendAsset(transactionAsset);
       const amount = await sendFlowRepository.getAmount();
       const address = await sendFlowRepository.getReceiverAddress();
+      console.log('setting cache', amount);
       setDataInCache({ amount, address });
     })()
       .catch(console.error)
@@ -62,6 +63,7 @@ const AddressAmountView: React.FC = () => {
               dataInCache={{ ...dataInCache }}
               asset={sendAsset}
               sendFlowRepository={sendFlowRepository}
+              walletRepository={walletRepository}
             />
           )}
         </>

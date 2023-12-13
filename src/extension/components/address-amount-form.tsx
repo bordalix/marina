@@ -9,16 +9,23 @@ import type { Asset, NetworkString } from 'marina-provider';
 import { fromSatoshi, getMinAmountFromPrecision, toSatoshi } from '../utility';
 import Input from './input';
 import React from 'react';
-import type { SendFlowRepository } from '../../domain/repository';
+import type { SendFlowRepository, WalletRepository } from '../../domain/repository';
+import {
+  fetchInvoiceFromLNURL,
+  getInvoicePrefixForNetwork,
+  isValidInvoiceForNetwork,
+  isValidLNURL,
+} from '../../domain/lightning';
+import { getInvoiceValue, makeSubmarineSwap } from '../../domain/boltz';
 
 interface FormValues {
-  address: string;
+  recipient: string;
   amount: string;
 }
 
 interface FormProps {
   dataInCache: Partial<{
-    address: string;
+    recipient: string;
     amount: number;
   }>;
   asset: Asset;
@@ -26,20 +33,24 @@ interface FormProps {
   sendFlowRepository: SendFlowRepository;
   history: RouteComponentProps['history'];
   network: NetworkString;
+  walletRepository: WalletRepository;
 }
 
 const isValidAddressForNetwork = (addr: string, net: NetworkString): boolean => {
   try {
     const network = networks[net];
-    if (!network) {
-      throw new Error('network not found');
-    }
+    if (!network) throw new Error('network not found');
     address.toOutputScript(addr, network);
     return true;
   } catch (ignore) {
     return false;
   }
 };
+
+const isValidRecipient = async (data: string, net: NetworkString): Promise<boolean> =>
+  isValidAddressForNetwork(data, net) ||
+  isValidInvoiceForNetwork(data, net) ||
+  (await isValidLNURL(data));
 
 /**
  * Sanitize input amount
@@ -85,21 +96,38 @@ const BaseForm = (props: FormProps & FormikProps<FormValues>) => {
     setFieldValue,
     setFieldTouched,
   } = props;
+
   const setMaxAmount = () => {
     const max = fromSatoshi(maxPossibleAmount, asset.precision);
     setFieldValue('amount', max, true);
     setFieldTouched('amount', true, false);
   };
 
+  const isLBTC = props.asset.assetHash === networks[props.network].assetHash;
+
+  const label = 'Address' + (isLBTC ? ', LN Invoice or LN URL' : '');
+
+  const placeholder =
+    `${networks[props.network].blech32}1...` +
+    (isLBTC ? ` or ${getInvoicePrefixForNetwork(props.network)}... or lnurl...` : '');
+
   return (
     <form onSubmit={handleSubmit} className="mt-8">
-      <p className="mb-2 text-base font-medium text-left">Address</p>
+      <p className="mb-2 text-base font-medium text-left">{label}</p>
       <Input
         {...props}
-        name="address"
-        placeholder={networks[props.network].blech32 + '1...'}
+        name="recipient"
+        placeholder={placeholder}
         type="text"
-        value={values.address}
+        value={values.recipient}
+        handleChange={(e: React.ChangeEvent<any>) => {
+          const invoice = e.target.value as string;
+          if (isValidInvoiceForNetwork(invoice, props.network)) {
+            const satoshis = getInvoiceValue(invoice);
+            if (satoshis) setFieldValue('amount', fromSatoshi(satoshis, asset.precision), true);
+          }
+          setFieldValue('recipient', invoice, true);
+        }}
       />
 
       <div className="flex content-center justify-between mb-2">
@@ -107,7 +135,7 @@ const BaseForm = (props: FormProps & FormikProps<FormValues>) => {
         <div className="text-primary text-right">
           <button
             onClick={setMaxAmount}
-            className="background-transparent focus:outline-none px-3 py-1 mt-1 mb-1 mr-1 text-xs font-bold uppercase transition-all duration-150 ease-linear outline-none"
+            className="background-transparent focus:outline-none py-1 mt-1 mb-1 text-xs font-bold uppercase transition-all duration-150 ease-linear outline-none"
             type="button"
           >
             SEND ALL
@@ -118,9 +146,8 @@ const BaseForm = (props: FormProps & FormikProps<FormValues>) => {
         {...props}
         handleChange={(e: React.ChangeEvent<any>) => {
           const amount = e.target.value as string;
-          if (amount !== '') {
-            setFieldValue('amount', sanitizeInputAmount(amount, asset.precision), true);
-          }
+          if (amount === '') return;
+          setFieldValue('amount', sanitizeInputAmount(amount, asset.precision), true);
         }}
         value={values.amount}
         name="amount"
@@ -135,7 +162,9 @@ const BaseForm = (props: FormProps & FormikProps<FormValues>) => {
           className="w-2/5 -mt-2 text-base"
           disabled={
             isSubmitting ||
-            !!((errors.address && touched.address) || (errors.amount && touched.amount))
+            !values.amount ||
+            !values.recipient ||
+            !!((errors.recipient && touched.recipient) || (errors.amount && touched.amount))
           }
           type="submit"
         >
@@ -147,15 +176,13 @@ const BaseForm = (props: FormProps & FormikProps<FormValues>) => {
 };
 
 function amountToValue(amount?: number, precision = 8): string {
-  if (amount === undefined) return '';
-  return amount <= 0
-    ? ''
-    : sanitizeInputAmount(fromSatoshi(amount ?? 0, precision).toString(), precision);
+  if (amount === undefined || amount <= 0) return '';
+  return sanitizeInputAmount(fromSatoshi(amount ?? 0, precision).toString(), precision);
 }
 
 const AddressAmountForm = withFormik<FormProps, FormValues>({
   mapPropsToValues: (props: FormProps): FormValues => ({
-    address: props.dataInCache.address ?? '',
+    recipient: props.dataInCache.recipient ?? '',
     // Little hack to initialize empty value of type number
     // https://github.com/formium/formik/issues/321#issuecomment-478364302
     amount: amountToValue(props.dataInCache.amount, props.asset.precision),
@@ -163,12 +190,12 @@ const AddressAmountForm = withFormik<FormProps, FormValues>({
 
   validationSchema: (props: FormProps): any =>
     Yup.object().shape({
-      address: Yup.string()
-        .required('Address is required')
+      recipient: Yup.string()
+        .required('Recipient is required')
         .test(
-          'valid-address',
-          'Address is not valid',
-          (value) => value !== undefined && isValidAddressForNetwork(value, props.network)
+          'valid-recipient',
+          'Recipient is not valid',
+          (value) => value !== undefined && isValidRecipient(value, props.network)
         ),
 
       amount: Yup.number()
@@ -185,14 +212,33 @@ const AddressAmountForm = withFormik<FormProps, FormValues>({
             value !== undefined &&
             value <= fromSatoshi(props.maxPossibleAmount, props.asset.precision)
           );
+        })
+        .test('above-minimal-swap', 'Amount is required dudde', (value) => {
+          console.log('value', value);
+          return true;
         }),
     }),
 
   handleSubmit: async (values, { props }) => {
-    await props.sendFlowRepository.setReceiverAddressAmount(
-      values.address,
-      toSatoshi(Number(values.amount), props.asset.precision)
-    );
+    let receiverAddress = values.recipient;
+    let amount = toSatoshi(Number(values.amount), props.asset.precision);
+    if (!isValidAddressForNetwork(values.recipient, props.network)) {
+      let invoice = values.recipient;
+      if (!isValidInvoiceForNetwork(invoice, props.network)) {
+        invoice = await fetchInvoiceFromLNURL(values.recipient);
+        if (!isValidInvoiceForNetwork(invoice, props.network)) return;
+      }
+      // make swap
+      const { address, expectedAmount } = await makeSubmarineSwap(
+        invoice,
+        props.network,
+        props.walletRepository
+      );
+      receiverAddress = address;
+      amount = expectedAmount;
+    }
+
+    await props.sendFlowRepository.setReceiverAddressAmount(receiverAddress, amount);
 
     props.history.push({
       pathname: SEND_CHOOSE_FEE_ROUTE,
