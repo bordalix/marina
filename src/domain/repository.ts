@@ -27,6 +27,7 @@ import { mnemonicToSeed } from 'bip39';
 import { SLIP77Factory } from 'slip77';
 import type { BlockHeader, ChainSource } from './chainsource';
 import type { SwapData } from '../infrastructure/storage/receive-flow-repository';
+import type { SwapInfo } from '../infrastructure/storage/send-flow-repository';
 
 export interface AppStatus {
   isMnemonicVerified: boolean;
@@ -224,7 +225,8 @@ export interface SendFlowRepository {
   setUnsignedPset(pset: string): Promise<void>;
   getUnsignedPset(): Promise<string | undefined>;
   getStep(): Promise<SendFlowStep>;
-  setLightning(bool: boolean): Promise<void>;
+  setSwapInfo(si: SwapInfo): Promise<void>;
+  getSwapInfo(): Promise<SwapInfo | undefined>;
 }
 
 // this repository aims to cache the block headers
@@ -305,6 +307,7 @@ export async function initWalletRepository(
   };
 }
 
+// TODO
 export interface RefundableSwapParams {
   blindingKey: string;
   confidentialAddress?: string;

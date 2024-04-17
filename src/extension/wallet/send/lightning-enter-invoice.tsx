@@ -6,33 +6,32 @@ import Button from '../../components/button';
 import { SEND_CHOOSE_FEE_ROUTE } from '../../routes/constants';
 import { networks } from 'liquidjs-lib';
 import { fromSatoshi, toSatoshi } from '../../utility';
-import { AccountFactory, MainAccount, MainAccountTest } from '../../../application/account';
 import { useStorageContext } from '../../context/storage-context';
-import type { BoltzPair, SubmarineSwap } from '../../../pkg/boltz';
-import { Boltz, boltzUrl } from '../../../pkg/boltz';
-import zkp from '@vulpemventures/secp256k1-zkp';
+import type { BoltzPair, SubmarineSwapResponse, MagicHint } from '../../../pkg/boltz';
+import { Boltz } from '../../../pkg/boltz';
 import { Spinner } from '../../components/spinner';
 import { addressFromScript } from '../../utility/address';
-
-const zkpLib = await zkp();
+import type { ECPairInterface } from 'ecpair';
+import ECPairFactory from 'ecpair';
+import * as ecc from 'tiny-secp256k1';
+import { AccountFactory, MainAccount, MainAccountTest } from '../../../application/account';
 
 const LightningInvoice: React.FC = () => {
   const history = useHistory();
   const { cache, sendFlowRepository, refundableSwapsRepository, walletRepository } =
     useStorageContext();
-  const [swapFees, setSwapFees] = useState(0);
   const [error, setError] = useState('');
   const [invoice, setInvoice] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [magicHint, setMagicHint] = useState<MagicHint>();
   const [pair, setPair] = useState<BoltzPair>();
+  const [swapFees, setSwapFees] = useState(0);
   const [touched, setTouched] = useState(false);
   const [value, setValue] = useState(0);
   const [warning, setWarning] = useState('');
 
   const network = cache?.network ?? 'liquid';
-  const boltz = new Boltz(boltzUrl[network], networks[network].assetHash, zkpLib);
-
-  void sendFlowRepository.setLightning(true);
+  const boltz = new Boltz(network);
 
   // get maximal and minimal amount for pair
   useEffect(() => {
@@ -43,27 +42,18 @@ const LightningInvoice: React.FC = () => {
     fetchData().catch(console.error);
   }, []);
 
-  const makeSwap = async (): Promise<SubmarineSwap | undefined> => {
+  const makeSwap = async (refundPublicKey: string): Promise<SubmarineSwapResponse | undefined> => {
     try {
-      // get account
-      const accountFactory = await AccountFactory.create(walletRepository);
-      const accountName = network === 'liquid' ? MainAccount : MainAccountTest;
-      const mainAccount = await accountFactory.make(network, accountName);
-
-      // get refund pub key and change address
-      const refundAddress = await mainAccount.getNextAddress(false);
-      const refundPublicKey = refundAddress.publicKey;
-
       // create submarine swap
-      const swap = await boltz.createSubmarineSwap(invoice, network, refundPublicKey);
-      const { address, blindingKey, expectedAmount, id, redeemScript } = swap;
+      const swap = await boltz.submarineSwap(invoice, refundPublicKey);
+      const { address, blindingKey, expectedAmount, id, swapTree } = swap;
 
       // calculate funding address (used for refunding case the swap fails)
-      const fundingAddress = addressFromScript(redeemScript, network);
+      const fundingAddress = addressFromScript(swapTree.refundLeaf.output, network);
 
       const expirationDate = boltz.getInvoiceExpireDate(invoice);
 
-      // save swap params to storage
+      // save swap params to storage TODO
       await refundableSwapsRepository.addSwap({
         blindingKey,
         confidentialAddress: address,
@@ -72,7 +62,7 @@ const LightningInvoice: React.FC = () => {
         id,
         invoice,
         fundingAddress,
-        redeemScript,
+        redeemScript: swapTree.refundLeaf.output,
         refundPublicKey,
         network,
       });
@@ -106,12 +96,14 @@ const LightningInvoice: React.FC = () => {
     const lbtcBalance = cache?.balances.value[networks[network].assetHash] ?? 0;
 
     try {
-      // get value from invoice
+      // decode invoice
       const value = boltz.getInvoiceValue(invoice);
       const valueInSats = toSatoshi(value);
-      const fees = boltz.calcBoltzFees(pair, valueInSats);
+      const magicHint = boltz.getMagicHint(invoice);
+      const fees = magicHint ? 0 : boltz.calcBoltzFees(pair, valueInSats);
       const expirationDate = boltz.getInvoiceExpireDate(invoice);
 
+      if (magicHint) setMagicHint(magicHint);
       setSwapFees(fees);
       setValue(value);
 
@@ -138,21 +130,39 @@ const LightningInvoice: React.FC = () => {
   };
 
   const handleProceed = async () => {
-    setIsSubmitting(true);
-
-    // check if we have a swap already made for this invoice
-    const swapOnCache = await refundableSwapsRepository.findSwapWithInvoice(invoice);
-
-    if (swapOnCache?.confidentialAddress && swapOnCache.expectedAmount) {
-      await sendFlowRepository.setReceiverAddressAmount(
-        swapOnCache?.confidentialAddress,
-        swapOnCache.expectedAmount
-      );
+    if (magicHint) {
+      if (!value) throw new Error('Invoice value is undefined');
+      const address = await boltz.getLiquidAddress(invoice, magicHint);
+      if (!address) throw new Error('Liquid address not found');
+      await sendFlowRepository.setReceiverAddressAmount(address, toSatoshi(value, 8));
     } else {
-      const swap = await makeSwap();
-      if (!swap) return;
-      const { address, expectedAmount } = swap;
-      await sendFlowRepository.setReceiverAddressAmount(address, expectedAmount);
+      setIsSubmitting(true);
+
+      // check if we have a swap already made for this invoice
+      const swapOnCache = await refundableSwapsRepository.findSwapWithInvoice(invoice);
+
+      if (swapOnCache?.confidentialAddress && swapOnCache.expectedAmount) {
+        await sendFlowRepository.setReceiverAddressAmount(
+          swapOnCache?.confidentialAddress,
+          swapOnCache.expectedAmount
+        );
+      } else {
+        // get account
+        const accountFactory = await AccountFactory.create(walletRepository);
+        const accountName = network === 'liquid' ? MainAccount : MainAccountTest;
+        const mainAccount = await accountFactory.make(network, accountName);
+
+        // get refund pub key and change address
+        const refundAddress = await mainAccount.getNextAddress(false);
+        const refundPublicKey = refundAddress.publicKey;
+
+        const swapResponse = await makeSwap(refundPublicKey);
+        if (!swapResponse) return;
+        console.log('setSwapInfo', { invoice, refundPublicKey, swapResponse });
+        await sendFlowRepository.setSwapInfo({ invoice, refundPublicKey, swapResponse });
+        const { address, expectedAmount } = swapResponse;
+        await sendFlowRepository.setReceiverAddressAmount(address, expectedAmount);
+      }
     }
 
     // go to choose fee route

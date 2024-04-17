@@ -12,9 +12,10 @@ import { BlinderService } from '../../../application/blinder';
 import { Pset } from 'liquidjs-lib';
 import { lockTransactionInputs } from '../../../domain/transaction';
 import { useStorageContext } from '../../context/storage-context';
+import { Boltz } from '../../../pkg/boltz';
 
 const SendEndOfFlow: React.FC = () => {
-  const { appRepository, walletRepository, sendFlowRepository, refundableSwapsRepository } =
+  const { cache, appRepository, walletRepository, sendFlowRepository, refundableSwapsRepository } =
     useStorageContext();
   const history = useHistory();
   const [invalidPasswordError, setInvalidPasswordError] = useState(false);
@@ -43,6 +44,16 @@ const SendEndOfFlow: React.FC = () => {
       extractedTx = signer.finalizeAndExtract(signed);
       const txid = await chainSource.broadcastTransaction(extractedTx);
       if (!txid) throw new Error('something went wrong with the tx broadcasting');
+
+      // TODO
+      // const swapInfo = await sendFlowRepository.getSwapInfo();
+      // console.log('swapInfo', swapInfo);
+      // if (swapInfo) {
+      //   const network = cache?.network ?? 'liquid';
+      //   const boltz = new Boltz(network);
+      //   await boltz.finalizeSubmarineSwap(swapInfo);
+      // }
+
       await lockTransactionInputs(walletRepository, extractedTx);
       await sendFlowRepository.reset();
 

@@ -100,7 +100,7 @@ export class SignerService {
           // if we found it, update the tapLeafScript input field
           if (!isScriptPath) {
             const zkp = await zkpLib();
-            const contract = new Contract(artifact, params, networks[network], zkp);
+            const contract = new Contract(artifact, params, networks[network], zkp as any);
             const taprootTree = contract.taprootTree;
             const needs = analyzeTapscriptTree(taprootTree);
             const autospendableLeafScripts = Object.entries(needs)

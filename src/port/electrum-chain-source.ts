@@ -100,11 +100,11 @@ export class WsElectrumChainSource implements ChainSource {
     }
   }
 
-  waitForAddressReceivesTx(addr: string): Promise<void> {
+  waitForAddressReceivesTx(addr: string): Promise<any> {
     return new Promise((resolve, reject) => {
       this.subscribeScriptStatus(address.toOutputScript(addr), (_, status) => {
         if (status !== null) {
-          resolve();
+          resolve(status);
         }
       }).catch(reject);
     });

@@ -1,13 +1,20 @@
 import Browser from 'webextension-polyfill';
 import type { SendFlowRepository } from '../../domain/repository';
 import { SendFlowStep } from '../../domain/repository';
+import type { SubmarineSwapResponse } from '../../pkg/boltz';
+
+export type SwapInfo = {
+  invoice: string;
+  refundPublicKey: string;
+  swapResponse: SubmarineSwapResponse;
+};
 
 type Data = {
-  pset?: string;
-  receiverAddress?: string;
   amount?: number;
   asset?: string;
-  lightning?: boolean;
+  pset?: string;
+  receiverAddress?: string;
+  swapInfo?: SwapInfo;
 };
 
 enum SendFlowStorageKeys {
@@ -35,8 +42,8 @@ export class SendFlowStorageAPI implements SendFlowRepository {
     if (!data) return SendFlowStep.None;
     if (data.pset) return SendFlowStep.FeeFormDone;
     if (data.receiverAddress && data.amount) return SendFlowStep.AddressAmountFormDone;
-    if (data.asset && !data.lightning) return SendFlowStep.AssetSelected;
-    if (data.asset && data.lightning) return SendFlowStep.Lightning;
+    if (data.asset && !data.swapInfo) return SendFlowStep.AssetSelected;
+    if (data.asset && data.swapInfo) return SendFlowStep.Lightning;
     return SendFlowStep.None;
   }
 
@@ -74,6 +81,11 @@ export class SendFlowStorageAPI implements SendFlowRepository {
     return data.pset;
   }
 
+  async getSwapInfo(): Promise<SwapInfo | undefined> {
+    const data = await this.getSendFlowData();
+    return data?.swapInfo;
+  }
+
   setSelectedAsset(asset: string): Promise<void> {
     return this.updateSendFlowData({ asset });
   }
@@ -86,7 +98,7 @@ export class SendFlowStorageAPI implements SendFlowRepository {
     return this.updateSendFlowData({ pset });
   }
 
-  setLightning(lightning: boolean): Promise<void> {
-    return this.updateSendFlowData({ lightning });
+  setSwapInfo(swapInfo: SwapInfo): Promise<void> {
+    return this.updateSendFlowData({ swapInfo });
   }
 }

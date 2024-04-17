@@ -5,9 +5,8 @@ import Button from '../components/button';
 import cx from 'classnames';
 import * as ecc from 'tiny-secp256k1';
 import { extractErrorMessage } from '../utility/error';
-import zkp from '@vulpemventures/secp256k1-zkp';
-import { Boltz, boltzUrl } from '../../pkg/boltz';
-import { address, networks } from 'liquidjs-lib';
+import { Boltz } from '../../pkg/boltz';
+import { address } from 'liquidjs-lib';
 import { useStorageContext } from '../context/storage-context';
 import { SEND_PAYMENT_SUCCESS_ROUTE } from '../routes/constants';
 import type { ECPairInterface } from 'ecpair';
@@ -22,7 +21,6 @@ import ButtonsAtBottom from '../components/buttons-at-bottom';
 import { toOutputScript } from 'liquidjs-lib/src/address';
 import axios from 'axios';
 
-const zkpLib = await zkp();
 const bip32 = BIP32Factory(ecc);
 
 const SettingsMenuSwaps: React.FC = () => {
@@ -43,7 +41,7 @@ const SettingsMenuSwaps: React.FC = () => {
   const [passwordError, setPasswordError] = useState('');
 
   const network = cache?.network ?? 'liquid';
-  const boltz = new Boltz(boltzUrl[network], networks[network].assetHash, zkpLib);
+  const boltz = new Boltz(network);
 
   useEffect(() => {
     (async () => {

@@ -154,7 +154,7 @@ export class Account {
     const zkpLib = await ZKPLib();
 
     return Object.entries(scripts).map(([script, details]) =>
-      scriptDetailsWithKeyToAddress(this.network, type, zkpLib)(
+      scriptDetailsWithKeyToAddress(this.network, type, zkpLib as any)(
         script,
         details,
         details.derivationPath
@@ -211,7 +211,7 @@ export class Account {
     ]);
 
     const zkpLib = await ZKPLib();
-    const addr = scriptDetailsWithKeyToAddress(this.network, type, zkpLib)(
+    const addr = scriptDetailsWithKeyToAddress(this.network, type, zkpLib as any)(
       script,
       scriptDetails,
       keyPair.publicKey.toString('hex')
